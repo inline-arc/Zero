@@ -547,8 +547,15 @@ export const MailList = memo(
     const [category, setCategory] = useQueryState('category');
     const [searchValue, setSearchValue] = useSearchValue();
     const { enableScope, disableScope } = useHotkeysContext();
-    const [{ refetch, isLoading, isFetching, isFetchingNextPage, hasNextPage }, items, , loadMore] =
-      useThreads();
+    const [
+      { refetch, isLoading, isFetching, isFetchingNextPage, hasNextPage },
+      items,
+      ,
+      loadMore,
+    ] = useThreads();
+
+    // Ensure items are of type ParsedMessage[]
+    const parsedItems: ParsedMessage[] = (items as ParsedMessage[]);
 
     const allCategories = Categories();
 
@@ -584,6 +591,47 @@ export const MailList = memo(
 
     const parentRef = useRef<HTMLDivElement>(null);
 
+    // Infinite scroll handler: fetch next page only when user scrolls near the bottom.
+    const handleScroll = useCallback(() => {
+      const parent = parentRef.current;
+      if (!parent) return;
+      // Only fetch next page when user scrolls near the bottom and not already fetching
+      if (
+        parent.scrollTop + parent.clientHeight >= parent.scrollHeight - 200 &&
+        !isLoading &&
+        !isFetchingNextPage &&
+        hasNextPage
+      ) {
+        loadMore(); 
+      }
+    }, [isLoading, isFetchingNextPage, hasNextPage, loadMore]);
+
+    // Attach scroll listener, only fetch on scroll events (not recursively)
+    useEffect(() => {
+      const parent = parentRef.current;
+      if (!parent) return;
+
+      let ticking = false;
+      const onScroll = () => {
+        if (!ticking) {
+          window.requestAnimationFrame(() => {
+            handleScroll();
+            ticking = false;
+          });
+          ticking = true;
+        }
+      };
+
+      parent.addEventListener('scroll', onScroll);
+
+      // Optionally, fetch if already at bottom on mount
+      handleScroll();
+
+      return () => {
+        parent.removeEventListener('scroll', onScroll);
+      };
+    }, [handleScroll]);
+
     const handleNavigateToThread = useCallback(
       (threadId: string) => {
         setThreadId(threadId);
@@ -598,12 +646,6 @@ export const MailList = memo(
       containerRef: parentRef,
       onNavigate: handleNavigateToThread,
     });
-
-    const handleLoadMore = useCallback(() => {
-      if (isLoading || isFetching || isFetchingNextPage || !hasNextPage) return;
-      console.log('Loading more items...');
-      void loadMore();
-    }, [isLoading, isFetchingNextPage, loadMore, hasNextPage]);
 
     const isKeyPressed = useKeyState();
 
@@ -732,32 +774,13 @@ export const MailList = memo(
       (index: number) => {
         const item = filteredItems[index];
         return (
-          <>
-            <Comp
-              onClick={handleMailClick}
-              message={item}
-              key={item.id}
-              isKeyboardFocused={focusedIndex === index && keyboardActive}
-              index={index}
-            />
-            {index === filteredItems.length - 1 && (
-              <Button
-                variant={'ghost'}
-                className="w-full rounded-none"
-                onMouseDown={handleLoadMore}
-                disabled={isLoading || items.length <= 9 || !hasNextPage || isFetchingNextPage}
-              >
-                {isFetchingNextPage ? (
-                  <div className="flex items-center gap-2">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-900 border-t-transparent dark:border-white dark:border-t-transparent" />
-                    {t('common.actions.loading')}
-                  </div>
-                ) : (
-                  <span>{t('common.mail.loadMore')}</span>
-                )}
-              </Button>
-            )}
-          </>
+          <Comp
+            key={item.id}
+            message={item}
+            isKeyboardFocused={focusedIndex === index && keyboardActive}
+            index={index}
+            onClick={handleMailClick}
+          />
         );
       },
       [
@@ -765,7 +788,6 @@ export const MailList = memo(
         focusedIndex,
         keyboardActive,
         handleMailClick,
-        handleLoadMore,
         isLoading,
         isFetching,
         hasNextPage,
@@ -778,7 +800,7 @@ export const MailList = memo(
         <div
           ref={parentRef}
           className={cn(
-            'hide-link-indicator flex h-full w-full',
+            'hide-link-indicator flex h-full w-full overflow-y-auto', // ensure scrollable
             getSelectMode() === 'range' && 'select-none',
           )}
           onMouseEnter={() => {
